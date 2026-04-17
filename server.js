@@ -4,6 +4,7 @@ import dotenv from "dotenv";
 import OpenAI from "openai";
 
 dotenv.config();
+const memoryStore = [];
 
 const app = express();
 app.use(cors());
@@ -34,6 +35,20 @@ app.post("/analyze", async (req, res) => {
       role: "user",
       content: `分析数据：${JSON.stringify(data)}`,
     },
+    {
+      role: "system",
+      content: `
+你是一个数据分析Agent。
+
+你可以参考以下历史记忆：
+
+${JSON.stringify(memoryStore.slice(-3), null, 2)}
+
+规则：
+1. 如果有类似分析，必须参考历史结果
+2. 不要重复做已经做过的分析
+`
+    }
   ];
 
   try {
@@ -111,8 +126,18 @@ app.post("/analyze", async (req, res) => {
 
       // 👉 如果AI给出最终答案
       if (message.content.includes("最终结论")) {
+
+        // 🧠 存记忆
+        memoryStore.push({
+          time: Date.now(),
+          content: message.content,
+          summary: req.body.data
+        });
+
+        console.log("🧠 memoryStore:", memoryStore);
         return res.json({
           result: message.content,
+          memory: memoryStore
         });
       }
     }
