@@ -216,28 +216,38 @@ async function reportAgent(analysisResult) {
 // =========================
 // 🧠 调度器
 // =========================
-async function runMultiAgent(data) {
+async function runMultiAgent(data, onUpdate) {
   console.log('🚀 Multi-Agent 启动')
+
+  const log = (step, content) => {
+    console.log(step, content)
+    onUpdate?.({ step, content })
+  }
 
   // 1️⃣ Planner
   const plan = await createPlan(data);
   console.log('📄 Plan:', plan)
+  log('plan', plan)
 
   // 2️⃣ Memory
   const memory = await searchMemory(JSON.stringify(data));
   console.log('🧠 Memory:', memory?.text)
+  log('memory', memory?.text || '无')
 
   // 3️⃣ 分析
   const analysis = await analysisAgent(data, memory);
   console.log('📊 分析结果:', analysis)
+  log('analysis', analysis)
 
   // 4️⃣ 图表
   const chart = await chartAgent(analysis);
   console.log('📈 图表结果:', chart)
+  log('chart', chart)
 
   // 5️⃣ 报告
   const report = await reportAgent(analysis);
   console.log('📋 报告:', report)
+  log('report', report)
 
   // 6️⃣ 保存记忆
   await saveMemory(report);
@@ -414,6 +424,29 @@ app.post("/multi-analyze", async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// =========================
+// 🚀 SSE 实时推送
+// =========================
+app.post("/analyze-stream", async (req, res) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+
+  const send = (data) => {
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
+
+  try {
+    await runMultiAgent(req.body.data, send);
+
+    send({ done: true })
+    res.end();
+  } catch (err) {
+    send({ error: err.message });
+    res.end();
   }
 });
 
