@@ -87,49 +87,86 @@ async function searchMemory(query) {
 }
 
 // =========================
-// 🧠 tools
+// 🧠 Tools
 // =========================
 function calculateAverage(data) {
-  const sum = data.reduce((acc, item) => acc + item.sales, 0);
+  const sum = data.reduce((acc, i) => acc + i.sales, 0);
   return sum / data.length;
 }
 
 function getMax(data) {
-  return Math.max(...data.map((i) => i.sales));
+  return Math.max(...data.map(i => i.sales));
 }
 
 // =========================
-// 🚀 analyze Agent
+// 🧠 Planner（新增核心）
+// =========================
+async function createPlan(data) {
+  const res = await client.chat.completions.create({
+    model: process.env.ARK_MODEL,
+    messages: [
+      {
+        role: "system",
+        content: `
+你是一个数据分析规划专家。
+
+请生成执行计划：
+要求：
+1. 按 step1, step2... 输出
+2. 每一步要具体
+3. 不要执行
+`,
+      },
+      {
+        role: "user",
+        content: `分析数据：${JSON.stringify(data)}`,
+      },
+    ],
+  });
+
+  return res.choices[0].message.content;
+}
+
+// =========================
+// 🚀 Agent 主流程
 // =========================
 app.post("/analyze", async (req, res) => {
   const { data } = req.body;
 
-  // 🧠 查找历史记忆
-  const memory = await searchMemory(JSON.stringify(data));
+  try {
+    // 🧠 1. 生成计划
+    const plan = await createPlan(data);
+    console.log('📄 Plan:\n', plan);
 
-  let messages = [
-    {
-      role: "system",
-      content: `
-你是一个数据分析Agent。
+    // 🧠 2. 检索记忆
+    const memory = await searchMemory(JSON.stringify(data));
 
-规则：
-1. 必须参考历史经验（如果有）
-2. 涉及计算必须调用工具
-3. 不要编造数据
-4. 最终输出必须包含“最终结论”
+    let messages = [
+      {
+        role: "system",
+        content: `
+你是一个严格执行计划的数据分析Agent。
+
+执行规则：
+1. 必须严格按照步骤执行
+2. 每一步必须说明“正在执行 stepX”
+3. 涉及计算必须调用工具
+4. 不要重复步骤
+5. 最终必须输出“最终结论”
+
+执行计划：
+${plan}
 
 历史经验：
-${memory ? memory.text : "暂无历史经验"}
+${memory ? memory.text : "无"}
 `,
-    },
-    {
-      role: "user",
-      content: `分析以下数据：${JSON.stringify(data)}`,
-    },
-  ];
+      },
+      {
+        role: "user",
+        content: `分析数据：${JSON.stringify(data)}`,
+      },
+    ];
 
-  try {
     let loopCount = 0;
 
     while (loopCount < 5) {
@@ -203,7 +240,7 @@ ${memory ? memory.text : "暂无历史经验"}
       }
 
       // =========================
-      // 🧠 final answer
+      // ✅ 结束条件
       // =========================
       if (message.content?.includes("最终结论")) {
         // 🧠 存入 memory
@@ -211,12 +248,14 @@ ${memory ? memory.text : "暂无历史经验"}
 
         return res.json({
           result: message.content,
+          plan,
         });
       }
     }
 
     res.json({
-      result: "未在限定轮次内完成任务",
+      result: "未完成任务",
+      plan,
     });
   } catch (err) {
     console.error(err);
@@ -224,9 +263,25 @@ ${memory ? memory.text : "暂无历史经验"}
   }
 });
 
+
 // =========================
-// 🚀 start server
+// 🚀 test Planner
+// =========================
+app.post("/plan", async (req, res) => {
+  const { data } = req.body;
+
+  try {
+    const result = await createPlan(data);
+    res.json({ result });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// =========================
+// 🚀 启动
 // =========================
 app.listen(3000, () => {
-  console.log("🚀 Hermes Agent running on http://localhost:3000");
+  console.log("🚀 Day6 Agent running http://localhost:3000");
 });
