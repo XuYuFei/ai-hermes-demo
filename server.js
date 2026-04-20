@@ -4,51 +4,129 @@ import dotenv from "dotenv";
 import OpenAI from "openai";
 
 dotenv.config();
-const memoryStore = [];
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
+// =========================
+// 🧠 字节模型客户端
+// =========================
 const client = new OpenAI({
   apiKey: process.env.ARK_API_KEY,
-  baseURL: process.env.ARK_BASE_URL
+  baseURL: process.env.ARK_BASE_URL,
 });
 
-// ⭐ 核心：一个“带角色的Agent”
+// =========================
+// 🧠 向量记忆库
+// =========================
+const memoryStore = [];
+
+// =========================
+// 🧠 embedding
+// =========================
+async function getEmbedding(text) {
+  const res = await client.embeddings.create({
+    model: process.env.ARK_EMBEDDING_MODEL,
+    input: text
+  })
+
+  return res.data[0].embedding;
+}
+
+// =========================
+// 🧠 cosine similarity
+// =========================
+function cosineSimilarity(a, b) {
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+// =========================
+// 🧠 保存记忆
+// =========================
+async function saveMemory(text) {
+  const embedding = await getEmbedding(text);
+
+  memoryStore.push({
+    text,
+    embedding,
+  });
+}
+
+// =========================
+// 🧠 检索记忆
+// =========================
+async function searchMemory(query) {
+  if (memoryStore.length === 0) return null;
+
+  const queryEmbedding = await getEmbedding(query);
+
+  let best = null;
+  let bestScore = -1;
+
+  for (const mem of memoryStore) {
+    const score = cosineSimilarity(queryEmbedding, mem.embedding);
+
+    if (score > bestScore) {
+      bestScore = score;
+      best = mem;
+    }
+  }
+
+  return best;
+}
+
+// =========================
+// 🧠 tools
+// =========================
+function calculateAverage(data) {
+  const sum = data.reduce((acc, item) => acc + item.sales, 0);
+  return sum / data.length;
+}
+
+function getMax(data) {
+  return Math.max(...data.map((i) => i.sales));
+}
+
+// =========================
+// 🚀 analyze Agent
+// =========================
 app.post("/analyze", async (req, res) => {
   const { data } = req.body;
+
+  // 🧠 查找历史记忆
+  const memory = await searchMemory(JSON.stringify(data));
 
   let messages = [
     {
       role: "system",
       content: `
-你是一个数据分析Agent：
+你是一个数据分析Agent。
 
 规则：
-1. 分步骤完成任务
-2. 需要计算必须调用工具
-3. 完成后输出“最终结论”
+1. 必须参考历史经验（如果有）
+2. 涉及计算必须调用工具
+3. 不要编造数据
+4. 最终输出必须包含“最终结论”
+
+历史经验：
+${memory ? memory.text : "暂无历史经验"}
 `,
     },
     {
       role: "user",
-      content: `分析数据：${JSON.stringify(data)}`,
+      content: `分析以下数据：${JSON.stringify(data)}`,
     },
-    {
-      role: "system",
-      content: `
-你是一个数据分析Agent。
-
-你可以参考以下历史记忆：
-
-${JSON.stringify(memoryStore.slice(-3), null, 2)}
-
-规则：
-1. 如果有类似分析，必须参考历史结果
-2. 不要重复做已经做过的分析
-`
-    }
   ];
 
   try {
@@ -95,11 +173,12 @@ ${JSON.stringify(memoryStore.slice(-3), null, 2)}
       const message = completion.choices[0].message;
       messages.push(message);
 
-      // ✅ 打印 Agent 思考过程
-      console.log("🧠 当前 messages：");
-      console.log(JSON.stringify(messages, null, 2));
+      console.log(`\n🚀 第 ${loopCount} 轮`);
+      console.log(JSON.stringify(message, null, 2));
 
-      // 👉 如果 AI 调用工具
+      // =========================
+      // 🧠 tool call
+      // =========================
       if (message.tool_calls) {
         const toolCall = message.tool_calls[0];
         const args = JSON.parse(toolCall.function.arguments);
@@ -114,36 +193,30 @@ ${JSON.stringify(memoryStore.slice(-3), null, 2)}
           result = getMax(args.data);
         }
 
-        // 把工具结果喂回去
         messages.push({
           role: "tool",
           tool_call_id: toolCall.id,
           content: JSON.stringify({ result }),
         });
 
-        continue; // 👉 继续循环
+        continue;
       }
 
-      // 👉 如果AI给出最终答案
-      if (message.content.includes("最终结论")) {
+      // =========================
+      // 🧠 final answer
+      // =========================
+      if (message.content?.includes("最终结论")) {
+        // 🧠 存入 memory
+        await saveMemory(message.content);
 
-        // 🧠 存记忆
-        memoryStore.push({
-          time: Date.now(),
-          content: message.content,
-          summary: req.body.data
-        });
-
-        console.log("🧠 memoryStore:", memoryStore);
         return res.json({
           result: message.content,
-          memory: memoryStore
         });
       }
     }
 
     res.json({
-      result: "未能在限制步数内完成任务",
+      result: "未在限定轮次内完成任务",
     });
   } catch (err) {
     console.error(err);
@@ -151,15 +224,9 @@ ${JSON.stringify(memoryStore.slice(-3), null, 2)}
   }
 });
 
+// =========================
+// 🚀 start server
+// =========================
 app.listen(3000, () => {
-  console.log("🚀 Server running on http://localhost:3000");
+  console.log("🚀 Hermes Agent running on http://localhost:3000");
 });
-
-function calculateAverage(data) {
-  const sum = data.reduce((acc, item) => acc + item.sales, 0);
-  return sum / data.length;
-}
-
-function getMax(data) {
-  return Math.max(...data.map(i => i.sales));
-}
