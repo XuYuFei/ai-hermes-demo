@@ -128,6 +128,129 @@ async function createPlan(data) {
 }
 
 // =========================
+// 🧠 分析 agent
+// =========================
+async function analysisAgent(data, memory) {
+  const result = await client.chat.completions.create({
+    model: process.env.ARK_MODEL,
+    messages: [
+      {
+        role: "system",
+        content: `
+你是数据分析专家：
+
+要求：
+1. 输出结构化分析
+2. 可参考历史经验
+3. 不生成图表
+
+历史经验：
+${memory ? memory.text : "无"}
+`,
+      },
+      {
+        role: "user",
+        content: JSON.stringify(data)
+      },
+    ],
+  });
+
+  return result.choices[0].message.content;
+}
+
+// =========================
+// 🧠 图表 agent
+// =========================
+async function chartAgent(analysisResult) {
+  const result = await client.chat.completions.create({
+    model: process.env.ARK_MODEL,
+    messages: [
+      {
+        role: "system",
+        content: `
+你是数据可视化专家：
+
+要求：
+1. 输出 ECharts option JSON
+2. 必须是合法JSON
+3. 不要解释
+`,
+      },
+      {
+        role: "user",
+        content: analysisResult
+      },
+    ]
+  })
+
+  return result.choices[0].message.content;
+}
+
+// =========================
+// 🧠 报告 agent
+// =========================
+async function reportAgent(analysisResult) {
+  const result = await client.chat.completions.create({
+    model: process.env.ARK_MODEL,
+    messages: [
+      {
+        role: "system",
+        content: `
+你是商业分析专家：
+
+要求：
+1. 输出总结报告
+2. 简洁清晰
+`,
+      },
+      {
+        role: "user",
+        content: analysisResult
+      },
+    ]
+  })
+
+  return result.choices[0].message.content;
+}
+
+// =========================
+// 🧠 调度器
+// =========================
+async function runMultiAgent(data) {
+  console.log('🚀 Multi-Agent 启动')
+
+  // 1️⃣ Planner
+  const plan = await createPlan(data);
+  console.log('📄 Plan:', plan)
+
+  // 2️⃣ Memory
+  const memory = await searchMemory(JSON.stringify(data));
+  console.log('🧠 Memory:', memory?.text)
+
+  // 3️⃣ 分析
+  const analysis = await analysisAgent(data, memory);
+  console.log('📊 分析结果:', analysis)
+
+  // 4️⃣ 图表
+  const chart = await chartAgent(analysis);
+  console.log('📈 图表结果:', chart)
+
+  // 5️⃣ 报告
+  const report = await reportAgent(analysis);
+  console.log('📋 报告:', report)
+
+  // 6️⃣ 保存记忆
+  await saveMemory(report);
+
+  return {
+    plan,
+    analysis,
+    chart,
+    report
+  }
+}
+
+// =========================
 // 🚀 Agent 主流程
 // =========================
 app.post("/analyze", async (req, res) => {
@@ -280,8 +403,23 @@ app.post("/plan", async (req, res) => {
 });
 
 // =========================
+// 🚀 多任务 analyze
+// =========================
+app.post("/multi-analyze", async (req, res) => {
+  const { data } = req.body;
+
+  try {
+    const result = await runMultiAgent(data);
+    res.json({ result });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// =========================
 // 🚀 启动
 // =========================
 app.listen(3000, () => {
-  console.log("🚀 Day6 Agent running http://localhost:3000");
+  console.log("🚀 Hermes Agent running http://localhost:3000");
 });
